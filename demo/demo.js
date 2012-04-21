@@ -14,7 +14,7 @@
 
   $('#search-input').soulmate({
     url: 'http://0.0.0.0:5678/search',
-    types: ['paper'],
+    types: ['p'],
     renderCallback: render,
     selectCallback: select,
     minQueryLength: 2,

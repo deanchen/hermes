@@ -998,3 +998,4 @@ Oxidase-peroxidase enzymes of Datura innoxia. Oxidation of formylphenylacetic ac
 Purification of 2-oxoaldehyde dehydrogenase and its dependence on unusual amines.
 Determination of polyadenylate-rich ribonucleic acid in the nucleus and in the cytoplasm of plasmacytoma cells.
 The amino acid sequence of Neurospora NADP-specific glutamate dehydrogenase. The tryptic peptides.
+
