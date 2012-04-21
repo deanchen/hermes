@@ -4,24 +4,34 @@ redis = require('redis')
 
 MIN_COMPLETE = 2
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
-THROTTLE = 200
+CLIENTS = 30
 
 args = process.argv.splice(2)
 type = args[0]
 path = args[1]
+totalWorkers = args[2]
+workerIndex = args[3]
 
-client = redis.createClient()
+client = redis.createClient(6379, "127.0.0.1", {return_buffers: false})
 client.flushall()
+
+clients = [client]
+
+i = 0
+while (i < CLIENTS)
+    clients.push(redis.createClient(6379, "127.0.0.1", {return_buffers: false}))
+    i++
 
 index = 1
 buffer = []
 
 stream = fs.createReadStream(path, {encoding:'ascii'})
 commitLine = (line, i) ->
-    if line is "0" then return client.quit()
+    client = clients[Math.round((i/totalWorkers))%CLIENTS]
+    if line is "0" then return clients.forEach((client)-> client.quit())
     prefix(line).forEach((p) -> client.sadd(type + ":" + p, i))
     client.hset("soulmate-data:" + type, i, JSON.stringify({id: i, term: line}))
-    if i % 10000 is 0 then console.log(i)
+    if i % 10000 is 0 then console.log(workerIndex + ":" + i)
 
 prefix = (phrase) ->
     phrase
@@ -44,19 +54,16 @@ readLines = (input, cb) ->
         while (index > -1)
             line = buffer.substring(0, index)
             buffer = buffer.substring(index + 1)
-            cb(line, id++)
+            if (id % totalWorkers) == parseInt(workerIndex, 10)
+                cb(line, id++)
+            else
+                id++
             index = buffer.indexOf('\n')
     )
     input.on('end', () ->
         if buffer.length > 0 then cb(buffer, id++)
     )
 
-setInterval(() ->
-    stream.pause()
-    setTimeout(()->
-        stream.resume()
-    , THROTTLE)
-1000)
 
 Array::unique = ->
     output = {}
