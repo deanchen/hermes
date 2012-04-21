@@ -4,7 +4,6 @@ redis = require('redis')
 
 MIN_COMPLETE = 2
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
-console.log(STOP_WORDS)
 
 args = process.argv.splice(2)
 type = args[0]
@@ -14,13 +13,15 @@ client = redis.createClient()
 client.flushall()
 
 index = 0
-new lazy(fs.createReadStream(path, {encoding:'ascii'}))
+
+stream = fs.createReadStream(path, {encoding:'ascii'})
+lazy(stream)
     .lines
     .map(String)
     .forEach((line) ->
-        console.log(prefix(line))
+        if line is "0"
+            return client.quit()
         console.log(JSON.stringify({id: index++, term:line}))
-        return
     )
 
 prefix = (phrase) ->
