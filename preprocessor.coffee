@@ -3,7 +3,7 @@ lazy = require('lazy')
 redis = require('redis')
 
 PIPELINE = 10000
-COMMIT = false
+COMMIT = true
 
 MIN_COMPLETE = 3
 MAX_COMPLETE = 30
@@ -24,6 +24,9 @@ while (i < CLIENTS)
     i++
 clients[0].flushall()
 
+termClient = redis.createClient(6379, "127.0.0.1")
+termClient.select(1)
+
 index = 1
 stats = {lines:0, words:0, prefixes:0}
 
@@ -38,25 +41,39 @@ commitLine = (line, i) ->
     if COMMIT
         client = clients[Math.round((i/totalWorkers))%CLIENTS]
         unless line then clients.forEach((client)-> client.quit())
-        ###
-        prefix(line).forEach((p) -> 
-            sent++
-            client.sadd(type + ":" + p, i, (err)->
-                completed++
-                fill_pipeline()
-            )
+        prefix(line).forEach((p) ->
+            return if p is ""
+            if (!(uprefixes[p] > 1023))
+                uprefixes[p] = uprefixes[p] || 0
+                uprefixes[p]++
+                sent++
+                clients[0].sadd(p, i, (err) ->
+                    completed++
+                    fill_pipeline()
+                )
+                
         )
-        ###
         sent++
-        client.hset("terms-data:" + type, i, line, (err)->
+        hashSet(termClient, i, line, (err)->
             completed++
             fill_pipeline()
         )
-        if i % 1000 is 0
+        if i % 10000 is 0
             stats["elapsed"] = ((new Date()).getTime() - startTime)/60000
             client.info((err,info) ->
                 info = info.split('\r\n')
-                console.log({lines: i, elapsed: stats["elapsed"], memory: info[20], keys: info[43], sent: sent, completed: completed})
+                console.log(
+                    {
+                        lines: i,
+                        elapsed: stats["elapsed"],
+                        memory: info[20],
+                        keys: info[43],
+                        sent: sent,
+                        completed: completed,
+                        estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
+                        remainingTime: ((((20000000/i) * stats["elapsed"]) - stats["elapsed"]) / 60)
+                    }
+                )
                 console.log()
             )
     else
@@ -123,7 +140,7 @@ readLines = (input, cb) ->
 
     input.on('data', (data) ->
         if (sent - completed >  PIPELINE)
-            console.log("paused")
+            #console.log("paused")
             stream.pause()
         buffer += data
         index = buffer.indexOf('\n')
@@ -147,3 +164,11 @@ Array::unique = ->
     value for key, value of output
 
 readLines(stream, commitLine)
+
+hashKeyFields = (key) ->
+    bucketSize = 1024
+    {key: Math.round(key / bucketSize), field: key % bucketSize}
+
+hashSet = (client, key, value, cb) ->
+    keyfields = hashKeyFields(key)
+    client.hset(keyfields.key, keyfields.field, value, cb)
