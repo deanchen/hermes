@@ -6,6 +6,7 @@ PIPELINE = 10000
 COMMIT = false
 
 MIN_COMPLETE = 3
+MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
 CLIENTS = 1
 
@@ -14,15 +15,14 @@ type = args[0]
 path = args[1]
 totalWorkers = args[2]
 workerIndex = args[3]
-
+uprefixes = {}
 clients = []
-if COMMIT
-    i = 0
-    while (i < CLIENTS)
-        console.log(i)
-        clients.push(redis.createClient(6379, "127.0.0.1", {return_buffers: false}))
-        i++
-    clients[0].flushall()
+i = 0
+while (i < CLIENTS)
+    console.log(i)
+    clients.push(redis.createClient(6379, "127.0.0.1", {return_buffers: false}))
+    i++
+clients[0].flushall()
 
 index = 1
 stats = {lines:0, words:0, prefixes:0}
@@ -38,6 +38,7 @@ commitLine = (line, i) ->
     if COMMIT
         client = clients[Math.round((i/totalWorkers))%CLIENTS]
         unless line then clients.forEach((client)-> client.quit())
+        ###
         prefix(line).forEach((p) -> 
             sent++
             client.sadd(type + ":" + p, i, (err)->
@@ -45,8 +46,9 @@ commitLine = (line, i) ->
                 fill_pipeline()
             )
         )
+        ###
         sent++
-        client.hset("soulmate-data:" + type, i, JSON.stringify({id: i, term: line}), (err)->
+        client.hset("terms-data:" + type, i, line, (err)->
             completed++
             fill_pipeline()
         )
@@ -61,33 +63,59 @@ commitLine = (line, i) ->
         if line
             stats.lines++
             prefixes = prefix(line)
-            prefixes.forEach((p)-> console.log(p))
+            prefixes.forEach((p)->
+                return if p is ""
+                if (!(uprefixes[p] > 1023))
+                    uprefixes[p] = uprefixes[p] || 0
+                    uprefixes[p]++
+                    clients[0].sadd(p, i)
+                else
+                    #console.log(p, " exceded limit")
+                
+            )
             stats.prefixes += prefixes.length
-            if i % 100000 is 0
+            clients[0].incr("c:")
+            if i % 10000 is 0
+                stats["reallines"] = i
                 stats["words/line"] = stats.words/stats.lines
                 stats["prefix/word"] = stats.prefixes/stats.words
                 stats["prefix/line"] = stats.prefixes/stats.lines
                 stats["elapsed"] = ((new Date()).getTime() - startTime)/60000
-                console.log(stats)
+                clients[0].info((err,info) ->
+                    info = info.split('\r\n')
+                    stats["memory"] = info[19].split(":")[1]
+                    stats["keys"] = info[43].split(",")[0].split("=")[1]
+                    stats["uprefix/line"] = stats.keys/i
+                    stats["estimate"] = ((20000000/i) * stats.memory)/1073741824
+                    console.log(stats)
+                )
 
 fill_pipeline = () ->
     if sent - completed < PIPELINE
         stream.resume()
 
 prefix = (phrase) ->
-    phrase
+    tokens = phrase
         .toLowerCase()
         .replace('-', ' ')
-        .replace(/[^a-z0-9 ]/ig, '')
+        .replace(/[^a-z0-9 ]/ig, ' ')
         .trim()
         .split(' ')
         .filter((word)-> !~STOP_WORDS.indexOf(word))
-        .map((word) -> 
+        .map((word) ->
             unless COMMIT then stats.words++
-            [(MIN_COMPLETE - 1)..(word.length - 1)].map((length) -> word[0..length]))
-        .reduce((acc, prefixes) -> 
-            acc.concat(prefixes))
-        .unique()
+            if word.length > MAX_COMPLETE
+                upperlimit = MAX_COMPLETE - 1
+            else
+                upperlimit = word.length - 1
+            [(MIN_COMPLETE - 1)..(upperlimit)].map((length) -> word[0..length]))
+    if (tokens.length > 0)
+        return tokens
+            .reduce((acc, prefixes) ->
+                acc.concat(prefixes))
+            .unique()
+    else
+        return []
 
 readLines = (input, cb) ->
     id = 1
