@@ -11,20 +11,19 @@ STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
 CLIENTS = 1
 
 args = process.argv.splice(2)
-type = args[0]
-path = args[1]
-totalWorkers = args[2]
-workerIndex = args[3]
+path = args[0]
+totalWorkers = args[1]
+workerIndex = args[2]
 uprefixes = {}
 clients = []
 i = 0
 while (i < CLIENTS)
     console.log(i)
-    clients.push(redis.createClient(6379, "127.0.0.1", {return_buffers: false}))
+    clients.push(redis.createClient(6400, "127.0.0.1", {return_buffers: false}))
     i++
-clients[0].flushall()
+#clients[0].flushall()
 
-termClient = redis.createClient(6379, "127.0.0.1")
+termClient = redis.createClient(6400, "127.0.0.1")
 termClient.select(1)
 
 index = 1
@@ -39,15 +38,16 @@ finished_processing = false
 stream = fs.createReadStream(path, {encoding:'ascii'})
 commitLine = (line, i) ->
     if COMMIT
+        line = JSON.parse(line)
         client = clients[Math.round((i/totalWorkers))%CLIENTS]
         unless line then clients.forEach((client)-> client.quit())
-        prefix(line).forEach((p) ->
+        prefix(line.title).forEach((p) ->
             return if p is ""
             if (!(uprefixes[p] > 1023))
                 uprefixes[p] = uprefixes[p] || 0
                 uprefixes[p]++
                 sent++
-                clients[0].sadd(p, i, (err) ->
+                clients[0].sadd(p, line.id, (err) ->
                     completed++
                     fill_pipeline()
                 )
