@@ -13,7 +13,6 @@ COMMIT = true
 MIN_COMPLETE = 2
 MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
-CLIENTS = 1
 
 args = process.argv.splice(2)
 path = args[0]
@@ -21,12 +20,9 @@ totalWorkers = args[1]
 workerIndex = args[2]
 uprefixes = {}
 problemLines = [];
-clients = []
+
 i = 0
-while (i < CLIENTS)
-    console.log(i)
-    clients.push(redis.createClient(6400, "127.0.0.1", {return_buffers: false}))
-    i++
+client = redis.createClient(6400, "127.0.0.1")
 #clients[0].flushall()
 
 termClient = redis.createClient(6400, "127.0.0.1")
@@ -57,13 +53,12 @@ commitLine = (line, i) ->
             problemLines.push(line)
             return
         
-        client = clients[Math.round((i/totalWorkers))%CLIENTS]
         unless line
             console.log('###########')
             console.log(i + ": " + problemLines)
             console.log('###########')
 
-            clients.forEach((client)-> client.quit())
+            client.quit()
 
         prefixScores = prefix(line.title)
         Object.keys(prefixScores).forEach((prefix) ->
@@ -72,13 +67,7 @@ commitLine = (line, i) ->
             prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 
                 unless res > 1023
                     sent++
-                    ### 
-                    clients[0].sadd(p, line.id, (err) ->
-                        completed++
-                        fill_pipeline()
-                    )
-                    ###
-                    clients[0].zadd(p.phrase, p.score, line.id, (err) ->
+                    client.zadd(p.phrase, p.score, line.id, (err) ->
                         completed++
                         fill_pipeline()
                     )
