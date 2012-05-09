@@ -78,7 +78,6 @@ commitLine = (line, i) ->
                     completed++
                     fill_pipeline()
                     return console.log(err) if (err)
-                    console.log(ms)
             )
             ###
             prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 

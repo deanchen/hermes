@@ -105,7 +105,6 @@
           if (err) {
             return console.log(err);
           }
-          return console.log(ms);
         });
         /*
                     prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 
