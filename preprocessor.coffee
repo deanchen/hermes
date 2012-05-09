@@ -7,6 +7,7 @@ SCORING = {
     completeWordBonus : 1.4
     dupPrefixPenalty : 0.5
 }
+INSERT_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 PIPELINE = 10000
 COMMIT = true
 
@@ -23,6 +24,7 @@ problemLines = [];
 
 i = 0
 client = redis.createClient(6400, "127.0.0.1")
+client.select(0)
 #clients[0].flushall()
 
 termClient = redis.createClient(6400, "127.0.0.1")
@@ -62,24 +64,46 @@ commitLine = (line, i) ->
 
         prefixScores = prefix(line.title)
         Object.keys(prefixScores).forEach((prefix) ->
-            return if (prefix is "") or (uprefixes[prefix])
+            return if (prefix is "") or (uprefixes[prefix] != undefined)
+            score = prefixScores[prefix]
 
+            sent++
+            client.eval(
+                INSERT_PREFIX_SCRIPT,
+                3,
+                prefix,
+                score,
+                line.id,
+                (err, ms) ->
+                    completed++
+                    fill_pipeline()
+                    return console.log(err) if (err)
+                    console.log(ms)
+            )
+            ###
             prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 
-                unless res > 1023
+                unless res > 1024
                     sent++
-                    client.zadd(p.phrase, p.score, line.id, (err) ->
+                    client.zadd(prefix, score, line.id, (err) ->
                         completed++
                         fill_pipeline()
                     )
                 else
-                    uprefixes[p] = true
-                    
+                    uprefixes[prefix] = uprefixes[prefix] || 0
+
+                    if (score > uprefixes[prefix])
+                        client.zrange(prefix, 0, 0 'withscores', (err, res) ->
+
+                        client.multi()
+                            .zrange
+                            .rem
+                            .add
             )
                 
+        ###
         )
-        process.exit(1);
         sent++
-        hashSet(termClient, i, JSON.stringify(line), (err)->
+        hashSet(termClient, line.id, JSON.stringify(line), (err)->
             completed++
             fill_pipeline()
         )
