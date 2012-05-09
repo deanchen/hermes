@@ -5,7 +5,7 @@ redis = require('redis')
 PIPELINE = 10000
 COMMIT = true
 
-MIN_COMPLETE = 3
+MIN_COMPLETE = 2
 MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
 CLIENTS = 1
@@ -26,6 +26,9 @@ while (i < CLIENTS)
 termClient = redis.createClient(6400, "127.0.0.1")
 termClient.select(1)
 
+prefixClient = redis.createClient(6400, "127.0.0.1")
+prefixClient.select(2)
+
 index = 1
 stats = {lines:0, words:0, prefixes:0}
 
@@ -42,24 +45,28 @@ commitLine = (line, i) ->
         client = clients[Math.round((i/totalWorkers))%CLIENTS]
         unless line then clients.forEach((client)-> client.quit())
         prefix(line.title).forEach((p) ->
-            return if p is ""
-            if (!(uprefixes[p] > 1023))
-                uprefixes[p] = uprefixes[p] || 0
-                uprefixes[p]++
-                sent++
-                clients[0].sadd(p, line.id, (err) ->
-                    completed++
-                    fill_pipeline()
-                )
+            return if (p is "") or (uprefixes[p])
+            prefixClient.hincrby("prefixes", p, 1, (err, res)-> 
+                unless res > 1023
+                    uprefixes[p] = uprefixes[p] || 0
+                    uprefixes[p]++
+                    sent++
+                    clients[0].sadd(p, line.id, (err) ->
+                        completed++
+                        fill_pipeline()
+                    )
+                else
+                    uprefixes[p] = true
+            )
                 
         )
         sent++
-        hashSet(termClient, i, line, (err)->
+        hashSet(termClient, i, JSON.stringify(line), (err)->
             completed++
             fill_pipeline()
         )
         if i % 10000 is 0
-            stats["elapsed"] = ((new Date()).getTime() - startTime)/60000
+            stats["elapsed"] = ((new Date()).getTime() - startTime)/(60 * 1000)
             client.info((err,info) ->
                 info = info.split('\r\n')
                 console.log(
@@ -71,10 +78,9 @@ commitLine = (line, i) ->
                         sent: sent,
                         completed: completed,
                         estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
-                        remainingTime: ((((20000000/i) * stats["elapsed"]) - stats["elapsed"]) / 60)
+                        remainingTime: (20000000/i - 1) * stats["elapsed"]
                     }
                 )
-                console.log()
             )
     else
         if line
