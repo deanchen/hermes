@@ -2,6 +2,11 @@ fs = require('fs')
 lazy = require('lazy')
 redis = require('redis')
 
+SCORING = {
+    scale : 10
+    completeWordBonus : 1.4
+    dupPrefixPenalty : 0.5
+}
 PIPELINE = 10000
 COMMIT = true
 
@@ -15,6 +20,7 @@ path = args[0]
 totalWorkers = args[1]
 workerIndex = args[2]
 uprefixes = {}
+problemLines = [];
 clients = []
 i = 0
 while (i < CLIENTS)
@@ -41,31 +47,54 @@ finished_processing = false
 stream = fs.createReadStream(path, {encoding:'ascii'})
 commitLine = (line, i) ->
     if COMMIT
-        line = JSON.parse(line)
+        try 
+            line = JSON.parse(line)
+        catch e
+            console.log('##############')
+            console.log(line)
+            console.log(e)
+            console.log('##############')
+            problemLines.push(line)
+            return
+        
         client = clients[Math.round((i/totalWorkers))%CLIENTS]
-        unless line then clients.forEach((client)-> client.quit())
-        prefix(line.title).forEach((p) ->
-            return if (p is "") or (uprefixes[p])
-            prefixClient.hincrby("prefixes", p, 1, (err, res)-> 
+        unless line
+            console.log('###########')
+            console.log(i + ": " + problemLines)
+            console.log('###########')
+
+            clients.forEach((client)-> client.quit())
+
+        prefixScores = prefix(line.title)
+        Object.keys(prefixScores).forEach((prefix) ->
+            return if (prefix is "") or (uprefixes[prefix])
+
+            prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 
                 unless res > 1023
-                    uprefixes[p] = uprefixes[p] || 0
-                    uprefixes[p]++
                     sent++
+                    ### 
                     clients[0].sadd(p, line.id, (err) ->
+                        completed++
+                        fill_pipeline()
+                    )
+                    ###
+                    clients[0].zadd(p.phrase, p.score, line.id, (err) ->
                         completed++
                         fill_pipeline()
                     )
                 else
                     uprefixes[p] = true
+                    
             )
                 
         )
+        process.exit(1);
         sent++
         hashSet(termClient, i, JSON.stringify(line), (err)->
             completed++
             fill_pipeline()
         )
-        if i % 10000 is 0
+        if i % 100000 is 0
             stats["elapsed"] = ((new Date()).getTime() - startTime)/(60 * 1000)
             client.info((err,info) ->
                 info = info.split('\r\n')
@@ -78,7 +107,7 @@ commitLine = (line, i) ->
                         sent: sent,
                         completed: completed,
                         estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
-                        remainingTime: (20000000/i - 1) * stats["elapsed"]
+                        remainingTime: Math.round((20000000/i - 1) * stats["elapsed"])
                     }
                 )
             )
@@ -120,7 +149,6 @@ fill_pipeline = () ->
 prefix = (phrase) ->
     tokens = phrase
         .toLowerCase()
-        .replace('-', ' ')
         .replace(/[^a-z0-9 ]/ig, ' ')
         .trim()
         .split(' ')
@@ -131,14 +159,41 @@ prefix = (phrase) ->
                 upperlimit = MAX_COMPLETE - 1
             else
                 upperlimit = word.length - 1
-            [(MIN_COMPLETE - 1)..(upperlimit)].map((length) -> word[0..length]))
+
+            lowerlimit = MIN_COMPLETE - 1
+            if (lowerlimit < upperlimit)
+                return [lowerlimit..upperlimit].map(
+                    (length) ->
+                        {
+                            "phrase": word[0..length],
+                            "score": prefixScore(length, upperlimit)
+                        }
+                )
+            else
+                return []
+        )
+
     if (tokens.length > 0)
         return tokens
             .reduce((acc, prefixes) ->
-                acc.concat(prefixes))
-            .unique()
+                prefixes.forEach((prefix) ->
+                    if acc[prefix.phrase]
+                        acc[prefix.phrase] += Math.round(prefix.score * SCORING.dupPrefixPenalty)
+                    else
+                        acc[prefix.phrase] = prefix.score
+                )
+                return acc
+            , {})
     else
-        return []
+        return {} 
+
+prefixScore = (length, upperlimit) ->
+    length -= MIN_COMPLETE - 2
+    upperlimit -= MIN_COMPLETE - 2 
+    if (length is upperlimit)
+        return SCORING.scale * SCORING.completeWordBonus
+    else
+        return Math.round((length/upperlimit) * SCORING.scale)
 
 readLines = (input, cb) ->
     id = 1
@@ -169,8 +224,6 @@ Array::unique = ->
     output[@[key]] = @[key] for key in [0...@length]
     value for key, value of output
 
-readLines(stream, commitLine)
-
 hashKeyFields = (key) ->
     bucketSize = 1024
     {key: Math.round(key / bucketSize), field: key % bucketSize}
@@ -178,3 +231,6 @@ hashKeyFields = (key) ->
 hashSet = (client, key, value, cb) ->
     keyfields = hashKeyFields(key)
     client.hset(keyfields.key, keyfields.field, value, cb)
+
+
+readLines(stream, commitLine)
