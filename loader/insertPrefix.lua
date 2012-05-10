@@ -1,12 +1,13 @@
 local prefixScores = KEYS[1]
 local id = tonumber(KEYS[2])
+local maxSetSize = ARGS[1]
 
 for prefix, score in pairs(cjson.decode(prefixScores)) do
     score = tonumber(score)
     local summary = id .. ":" .. score
 
     local setSize = redis.call('zcard', prefix)
-    if setSize < 1024 then
+    if setSize < maxSetSize then
         redis.call('zadd', prefix, score, id)
         return "added " .. prefix .. " " .. summary
     else

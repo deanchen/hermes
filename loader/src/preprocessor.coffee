@@ -1,6 +1,7 @@
 fs = require('fs')
 redis = require('redis')
 
+MAX_SET_SIZE = 1024 # need to match redis config
 SCORING = {
     scale : 10
     completeWordBonus : 1.4
@@ -89,6 +90,7 @@ storePrefixes = (id, prefixScores) ->
         2,
         JSON.stringify(prefixScores),
         id,
+        MAX_SET_SIZE,
         (err, ms) ->
             completed++
             fill_pipeline()
