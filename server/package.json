@@ -1,0 +1,10 @@
+{
+  "name": "hermes-server",
+  "version": "0.0.1",
+  "description": "Server for typeahead system",
+  "author": "Dean Chen<dean@ocirs.com>",
+  "dependencies": {
+    "redis": "*",
+    "underscore": "*"
+  }
+}
