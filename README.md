@@ -1,18 +1,9 @@
-Start redis
+# Hermes Typeahead Server
 
-    redis-server
+## Loader
 
-Run soulmate api server
+    npm install
 
-    soulmate-web --foreground --no-launch --redis=redis://localhost:6379/0
+    loader/controller.sh <path to dump> <number of thread>
 
-Load data in to soulmate
-
-    node preprocessor.js titles1000.txt | soulmate load paper --redis=redis://localhost:6379/0
-
-Start demo autocomplete field web server
-
-    python -m SimpleHTTPServer &
-
-
-**Visit http://localhost:8000/demo**
+## Demo
