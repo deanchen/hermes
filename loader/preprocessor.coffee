@@ -1,5 +1,7 @@
 fs = require('fs')
 redis = require('redis')
+_ = require('underscore')
+async = require('async')
 
 SCORING = {
     scale : 10
@@ -18,12 +20,16 @@ STORE_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 
 args = process.argv.splice(2)
 path = args[0]
+###
 totalWorkers = args[1]
 workerIndex = args[2]
-MAX_SET_SIZE = args[3] # need to match redis config
-PORT = args[4] # need to match redis config
+###
+totalWorkers = 1
+workerIndex = 0
+MAX_SET_SIZE = args[1] # need to match redis config
+PORT = args[2] # need to match redis config
 
-uprefixes = {}
+MIN_SCORES = {}
 problemLines = []
 
 i = 0
@@ -60,33 +66,29 @@ stream.on('end', () ->
     clients.forEach((client) -> client.quit())
 )
 
-commitLine = (line, i) ->
+commitLine = (task, cb) ->
+    line = task.line
     try
         line = JSON.parse(line)
     catch e
         return console.log(e)
 
-    storePrefixes(line.id, processTitle(line.title))
+    storePrefixes(line.id, removeLowScores(processTitle(line.title)), cb)
 
-    sent++
-    hashSet(termClient, line.id, JSON.stringify(line), (err)->
-        completed++
-        fill_pipeline()
-    )
+    hashSet(termClient, line.id, JSON.stringify(line))
 
-    showStats(i) if i % 100000 is 0
-
-storePrefixes = (id, prefixScores) ->
-    sent++
+storePrefixes = (id, prefixScores, cb) ->
     client.eval(
         STORE_PREFIX_SCRIPT,
         2,
         JSON.stringify(prefixScores),
         id,
         MAX_SET_SIZE,
-        (err, ms) ->
-            completed++
-            fill_pipeline()
+        (err, minScores) ->
+            _.extend(MIN_SCORES, JSON.parse(minScores))
+
+            cb(null)
+            fillQueue()
             if (err) then return console.log(err)
     )
 
@@ -131,6 +133,15 @@ processTitle = (phrase) ->
     else
         return {}
 
+removeLowScores = (prefixes) ->
+    Object.keys(prefixes).forEach((prefix) ->
+        score = prefixes[prefix]
+        if MIN_SCORES[prefix]
+            unless score > MIN_SCORES[prefix]
+                delete prefixes[prefix]
+    )
+    return prefixes
+
 prefixScore = (length, upperlimit) ->
     length -= MIN_COMPLETE - 2
     upperlimit -= MIN_COMPLETE - 2
@@ -158,15 +169,18 @@ showStats = (i) ->
         )
     )
 
-fill_pipeline = () ->
-    stream.resume() if (sent - completed < PIPELINE)
+
+
+QUEUE = async.queue(commitLine, 2)
+fillQueue = () ->
+    stream.resume() if QUEUE.length() < 6
 
 readLines = (input, cb) ->
     id = 1
     buffer = ''
 
     input.on('data', (data) ->
-        if (sent - completed > PIPELINE)
+        if QUEUE.length() > 10
             #console.log("paused")
             stream.pause()
         buffer += data
@@ -174,21 +188,17 @@ readLines = (input, cb) ->
         while (index > -1)
             line = buffer.substring(0, index)
             buffer = buffer.substring(index + 1)
-            if ((id % totalWorkers) == parseInt(workerIndex, 10)) || totalWorkers is 1
-                cb(line, id++)
-            else
-                id++
+            QUEUE.push({line: line})
+            id++
+
+            showStats(id) if id % 10000 is 0
+
             index = buffer.indexOf('\n')
     )
     input.on('end', () ->
         if buffer.length > 0 then cb(buffer, id++)
     )
 
-
-Array::unique = ->
-    output = {}
-    output[@[key]] = @[key] for key in [0...@length]
-    value for key, value of output
 
 hashKeyFields = (key) ->
     bucketSize = 1024

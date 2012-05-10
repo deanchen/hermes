@@ -4,6 +4,8 @@
   "description": "Data loader for hermes typeahead syste",
   "author": "Dean Chen<dean@ocirs.com>",
   "dependencies": {
-    "redis": "*"
+    "redis": "*",
+    "underscore": "*",
+    "async": "*"
   }
 }
