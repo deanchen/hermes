@@ -81,7 +81,7 @@ commitLine = (line, i) ->
         fill_pipeline()
     )
 
-    showStats(i) if i % 10000 is 0
+    showStats(i) if i % 100000 is 0
 
 storePrefixes = (id, prefixScores) ->
     sent++
