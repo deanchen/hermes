@@ -1,0 +1,10 @@
+{
+  "name": "hermes-loader",
+  "version": "0.0.1",
+  "description": "Data loader for hermes typeahead syste",
+  "author": "Dean Chen<dean@ocirs.com>",
+  "dependencies": {
+    "redis": "*",
+    "underscore": "*"
+  }
+}
