@@ -1,6 +1,6 @@
 local prefixScores = KEYS[1]
 local id = tonumber(KEYS[2])
-local maxSetSize = ARGS[1]
+local maxSetSize = tonumber(ARGV[1])
 
 for prefix, score in pairs(cjson.decode(prefixScores)) do
     score = tonumber(score)

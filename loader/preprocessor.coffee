@@ -22,6 +22,7 @@ totalWorkers = args[1]
 workerIndex = args[2]
 MAX_SET_SIZE = args[3] # need to match redis config
 PORT = args[4] # need to match redis config
+console.log(args)
 uprefixes = {}
 problemLines = []
 
