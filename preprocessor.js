@@ -117,7 +117,7 @@
       completed++;
       return fill_pipeline();
     });
-    if (i % 10000 === 0) {
+    if (i % 100000 === 0) {
       return showStats(i);
     }
   };
