@@ -6,7 +6,7 @@ for prefix, score in pairs(cjson.decode(prefixScores)) do
     local summary = id .. ":" .. score
 
     local setSize = redis.call('zcard', prefix)
-    if setSize <= 1024 then
+    if setSize < 1024 then
         redis.call('zadd', prefix, score, id)
         return "added " .. prefix .. " " .. summary
     else
