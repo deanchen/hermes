@@ -4,7 +4,7 @@ redis = require('redis')
 SCORING = {
     scale : 10
     completeWordBonus : 1.4
-    dupPrefixPenalty : 0.5
+    dupPrefixPenalty : 0.2
 }
 PIPELINE = 10000
 COMMIT = true
@@ -122,9 +122,9 @@ processTitle = (phrase) ->
             .reduce((acc, prefixes) ->
                 prefixes.forEach((prefix) ->
                     if acc[prefix.phrase]
-                        acc[prefix.phrase] += Math.round(prefix.score * SCORING.dupPrefixPenalty)
+                        acc[prefix.phrase] += Math.round(prefix.score * SCORING.dupPrefixPenalty) # dups are scored less
                     else
-                        acc[prefix.phrase] = prefix.score
+                        acc[prefix.phrase] = prefix.score + scale * 10 # add base to ensure that intersection always win
                 )
                 return acc
             , {})
