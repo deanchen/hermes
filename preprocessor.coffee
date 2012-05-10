@@ -180,7 +180,10 @@ readLines = (input, cb) ->
         while (index > -1)
             line = buffer.substring(0, index)
             buffer = buffer.substring(index + 1)
-            cb(line, id++)
+            if ((id % totalWorkers) == parseInt(workerIndex, 10)) || totalWorkers is 1
+                cb(line, id++)
+            else
+                id++
             index = buffer.indexOf('\n')
     )
     input.on('end', () ->
