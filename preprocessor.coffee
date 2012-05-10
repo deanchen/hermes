@@ -10,6 +10,7 @@ SCORING = {
 PIPELINE = 10000
 COMMIT = true
 
+ESTIMATE_LINES = 22000000
 MIN_COMPLETE = 2
 MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
@@ -80,7 +81,7 @@ commitLine = (line, i) ->
         fill_pipeline()
     )
 
-    showStats(i) if i % 100000 is 0
+    showStats(i) if i % 10000 is 0
 
 storePrefixes = (id, prefixScores) ->
     sent++
@@ -94,50 +95,6 @@ storePrefixes = (id, prefixScores) ->
             fill_pipeline()
             if (err) then return console.log(err) 
     )
-    ###
-    Object.keys(prefixScores).forEach((prefix) ->
-        return if prefix is ""
-        score = prefixScores[prefix]
-        sent++
-        prefixClient.hincrby("prefixes", prefix, 1, (err, res) -> 
-            unless res > 1023
-                sent++
-                client.zadd(prefix, score, id, (err) ->
-                    completed++
-                    fill_pipeline()
-                )
-            else
-                uprefixes[prefix] = uprefixes[prefix] || 0
-                if score > uprefixes[prefix]
-                    lockSet(prefix, id, (err) ->
-                        client.zrange(prefix, 0, 0, 'withscores', (err, min) ->
-                            setMinId = parseInt(min[0], 10)
-                            setMinScore = parseInt(min[1], 10)
-                            uprefixes[prefix] = setMinScore
-                            if score > setMinScore
-                                console.log([setMinId, setMinScore], [id, score])
-                                client.zrem(prefix, setMinId)
-                                client.zadd(prefix, score, id)
-                        )
-                    )
-        )
-    )
-    ###
-
-lockWaitQueueSize = 0
-###
-lockSet = (set, id, cb, repeat) ->
-    lockClient.setnx(set, id, (err, res) -> 
-        unless repeat then lockWaitQueueSize++
-        console.log(set + ":" + id + ":" + res)
-        if res is 1
-            lockWaitQueueSize--
-            fill_pipeline()
-            cb(null)
-        else
-            process.nextTick(() -> lockSet(set, id, cb, true))
-    )
-###
 
 processTitle = (phrase) ->
     tokens = phrase
@@ -192,29 +149,30 @@ showStats = (i) ->
     stats["elapsed"] = ((new Date()).getTime() - startTime)/(60 * 1000)
     client.info((err,info) ->
         info = info.split('\r\n')
+        memHuman = info[23].split(':')[1]
+        memBytes = info[22].split(':')[1]
         console.log(
             {
                 lines: i,
                 elapsed: stats["elapsed"],
-                memory: info[20],
-                keys: info[43],
+                memory: memHuman,
                 sent: sent,
                 completed: completed,
-                estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
-                remainingTime: Math.round((20000000/i - 1) * stats["elapsed"])
+                estimateMem: ((ESTIMATE_LINES/i) * memBytes)/1073741824
+                remainingTime: Math.round((ESTIMATE_LINES/i - 1) * stats["elapsed"])
             }
         )
     )
 
 fill_pipeline = () ->
-    stream.resume() if (sent - completed < PIPELINE) and (lockWaitQueueSize < 1)
+    stream.resume() if (sent - completed < PIPELINE)
 
 readLines = (input, cb) ->
     id = 1
     buffer = ''
 
     input.on('data', (data) ->
-        if (sent - completed > PIPELINE) or (lockWaitQueueSize > 1)
+        if (sent - completed > PIPELINE)
             #console.log("paused")
             stream.pause()
         buffer += data
@@ -222,10 +180,7 @@ readLines = (input, cb) ->
         while (index > -1)
             line = buffer.substring(0, index)
             buffer = buffer.substring(index + 1)
-            if ((id % totalWorkers) == parseInt(workerIndex, 10)) || totalWorkers is 1
-                cb(line, id++)
-            else
-                id++
+            cb(line, id++)
             index = buffer.indexOf('\n')
     )
     input.on('end', () ->
