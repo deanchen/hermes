@@ -5,6 +5,7 @@
   "author": "Dean Chen<dean@ocirs.com>",
   "dependencies": {
     "redis": "*",
-    "underscore": "*"
+    "underscore": "*",
+    "async": "*"
   }
 }
