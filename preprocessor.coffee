@@ -7,13 +7,14 @@ SCORING = {
     completeWordBonus : 1.4
     dupPrefixPenalty : 0.5
 }
-INSERT_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 PIPELINE = 10000
 COMMIT = true
 
 MIN_COMPLETE = 2
 MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
+SCRIPT_HASH = ""
+STORE_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 
 args = process.argv.splice(2)
 path = args[0]
@@ -23,15 +24,33 @@ uprefixes = {}
 problemLines = [];
 
 i = 0
+
+clients = []
+
 client = redis.createClient(6400, "127.0.0.1")
 client.select(0)
+clients.push(client)
 #clients[0].flushall()
 
 termClient = redis.createClient(6400, "127.0.0.1")
 termClient.select(1)
+clients.push(termClient)
 
 prefixClient = redis.createClient(6400, "127.0.0.1")
 prefixClient.select(2)
+clients.push(prefixClient)
+
+lockClient = redis.createClient(6400, "127.0.0.1")
+lockClient.select(3)
+clients.push(lockClient)
+
+###
+client.send_command('script', ['load', STORE_PREFIX_SCRIPT, (err, res) ->
+    if err then return console.log(err)
+    SCRIPT_HASH = res
+    readLines(stream, commitLine)
+)
+###
 
 index = 1
 stats = {lines:0, words:0, prefixes:0}
@@ -43,122 +62,84 @@ completed = 0
 
 finished_processing = false
 stream = fs.createReadStream(path, {encoding:'ascii'})
+stream.on('end', () -> 
+    clients.forEach((client) -> client.quit())
+)
+
 commitLine = (line, i) ->
-    if COMMIT
-        try 
-            line = JSON.parse(line)
-        catch e
-            console.log('##############')
-            console.log(line)
-            console.log(e)
-            console.log('##############')
-            problemLines.push(line)
-            return
-        
-        unless line
-            console.log('###########')
-            console.log(i + ": " + problemLines)
-            console.log('###########')
+    try 
+        line = JSON.parse(line)
+    catch e
+        return console.log(e)
 
-            client.quit()
+    storePrefixes(line.id, processTitle(line.title))
 
-        prefixScores = prefix(line.title)
-        Object.keys(prefixScores).forEach((prefix) ->
-            return if (prefix is "") or (uprefixes[prefix] != undefined)
-            score = prefixScores[prefix]
+    sent++
+    hashSet(termClient, line.id, JSON.stringify(line), (err)->
+        completed++
+        fill_pipeline()
+    )
 
-            sent++
-            client.eval(
-                INSERT_PREFIX_SCRIPT,
-                3,
-                prefix,
-                score,
-                line.id,
-                (err, ms) ->
-                    completed++
-                    fill_pipeline()
-                    return console.log(err) if (err)
-            )
-            ###
-            prefixClient.hincrby("prefixes", prefix, 1, (err, res)-> 
-                unless res > 1024
-                    sent++
-                    client.zadd(prefix, score, line.id, (err) ->
-                        completed++
-                        fill_pipeline()
-                    )
-                else
-                    uprefixes[prefix] = uprefixes[prefix] || 0
+    showStats(i) if i % 100000 is 0
 
-                    if (score > uprefixes[prefix])
-                        client.zrange(prefix, 0, 0 'withscores', (err, res) ->
-
-                        client.multi()
-                            .zrange
-                            .rem
-                            .add
-            )
-                
-        ###
-        )
-        sent++
-        hashSet(termClient, line.id, JSON.stringify(line), (err)->
+storePrefixes = (id, prefixScores) ->
+    sent++
+    client.eval(
+        STORE_PREFIX_SCRIPT,
+        2,
+        JSON.stringify(prefixScores),
+        id,
+        (err, ms) ->
             completed++
             fill_pipeline()
+            if (err) then return console.log(err) 
+    )
+    ###
+    Object.keys(prefixScores).forEach((prefix) ->
+        return if prefix is ""
+        score = prefixScores[prefix]
+        sent++
+        prefixClient.hincrby("prefixes", prefix, 1, (err, res) -> 
+            unless res > 1023
+                sent++
+                client.zadd(prefix, score, id, (err) ->
+                    completed++
+                    fill_pipeline()
+                )
+            else
+                uprefixes[prefix] = uprefixes[prefix] || 0
+                if score > uprefixes[prefix]
+                    lockSet(prefix, id, (err) ->
+                        client.zrange(prefix, 0, 0, 'withscores', (err, min) ->
+                            setMinId = parseInt(min[0], 10)
+                            setMinScore = parseInt(min[1], 10)
+                            uprefixes[prefix] = setMinScore
+                            if score > setMinScore
+                                console.log([setMinId, setMinScore], [id, score])
+                                client.zrem(prefix, setMinId)
+                                client.zadd(prefix, score, id)
+                        )
+                    )
         )
-        if i % 100000 is 0
-            stats["elapsed"] = ((new Date()).getTime() - startTime)/(60 * 1000)
-            client.info((err,info) ->
-                info = info.split('\r\n')
-                console.log(
-                    {
-                        lines: i,
-                        elapsed: stats["elapsed"],
-                        memory: info[20],
-                        keys: info[43],
-                        sent: sent,
-                        completed: completed,
-                        estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
-                        remainingTime: Math.round((20000000/i - 1) * stats["elapsed"])
-                    }
-                )
-            )
-    else
-        if line
-            stats.lines++
-            prefixes = prefix(line)
-            prefixes.forEach((p)->
-                return if p is ""
-                if (!(uprefixes[p] > 1023))
-                    uprefixes[p] = uprefixes[p] || 0
-                    uprefixes[p]++
-                    clients[0].sadd(p, i)
-                else
-                    #console.log(p, " exceded limit")
-                
-            )
-            stats.prefixes += prefixes.length
-            clients[0].incr("c:")
-            if i % 10000 is 0
-                stats["reallines"] = i
-                stats["words/line"] = stats.words/stats.lines
-                stats["prefix/word"] = stats.prefixes/stats.words
-                stats["prefix/line"] = stats.prefixes/stats.lines
-                stats["elapsed"] = ((new Date()).getTime() - startTime)/60000
-                clients[0].info((err,info) ->
-                    info = info.split('\r\n')
-                    stats["memory"] = info[19].split(":")[1]
-                    stats["keys"] = info[43].split(",")[0].split("=")[1]
-                    stats["uprefix/line"] = stats.keys/i
-                    stats["estimate"] = ((20000000/i) * stats.memory)/1073741824
-                    console.log(stats)
-                )
+    )
+    ###
 
-fill_pipeline = () ->
-    if sent - completed < PIPELINE
-        stream.resume()
+lockWaitQueueSize = 0
+###
+lockSet = (set, id, cb, repeat) ->
+    lockClient.setnx(set, id, (err, res) -> 
+        unless repeat then lockWaitQueueSize++
+        console.log(set + ":" + id + ":" + res)
+        if res is 1
+            lockWaitQueueSize--
+            fill_pipeline()
+            cb(null)
+        else
+            process.nextTick(() -> lockSet(set, id, cb, true))
+    )
+###
 
-prefix = (phrase) ->
+processTitle = (phrase) ->
     tokens = phrase
         .toLowerCase()
         .replace(/[^a-z0-9 ]/ig, ' ')
@@ -207,12 +188,33 @@ prefixScore = (length, upperlimit) ->
     else
         return Math.round((length/upperlimit) * SCORING.scale)
 
+showStats = (i) ->
+    stats["elapsed"] = ((new Date()).getTime() - startTime)/(60 * 1000)
+    client.info((err,info) ->
+        info = info.split('\r\n')
+        console.log(
+            {
+                lines: i,
+                elapsed: stats["elapsed"],
+                memory: info[20],
+                keys: info[43],
+                sent: sent,
+                completed: completed,
+                estimateMem: ((20000000/i) * (info[19].split(":")[1]))/1073741824
+                remainingTime: Math.round((20000000/i - 1) * stats["elapsed"])
+            }
+        )
+    )
+
+fill_pipeline = () ->
+    stream.resume() if (sent - completed < PIPELINE) and (lockWaitQueueSize < 1)
+
 readLines = (input, cb) ->
     id = 1
     buffer = ''
 
     input.on('data', (data) ->
-        if (sent - completed >  PIPELINE)
+        if (sent - completed > PIPELINE) or (lockWaitQueueSize > 1)
             #console.log("paused")
             stream.pause()
         buffer += data
