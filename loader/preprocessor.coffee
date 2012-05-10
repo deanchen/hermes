@@ -22,7 +22,7 @@ totalWorkers = args[1]
 workerIndex = args[2]
 MAX_SET_SIZE = args[3] # need to match redis config
 PORT = args[4] # need to match redis config
-console.log(args)
+
 uprefixes = {}
 problemLines = []
 
@@ -124,7 +124,7 @@ processTitle = (phrase) ->
                     if acc[prefix.phrase]
                         acc[prefix.phrase] += Math.round(prefix.score * SCORING.dupPrefixPenalty) # dups are scored less
                     else
-                        acc[prefix.phrase] = prefix.score + scale * 10 # add base to ensure that intersection always win
+                        acc[prefix.phrase] = prefix.score + SCORING.scale * 10 # add base to ensure that intersection always win
                 )
                 return acc
             , {})
