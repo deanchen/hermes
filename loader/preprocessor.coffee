@@ -8,7 +8,7 @@ SCORING = {
     completeWordBonus : 1.4
     dupPrefixPenalty : 0.2
 }
-PIPELINE = 10000
+CONCURRENCY = 4
 COMMIT = true
 
 ESTIMATE_LINES = 20000000
@@ -78,6 +78,8 @@ commitLine = (task, cb) ->
     hashSet(termClient, line.id, JSON.stringify(line))
 
 storePrefixes = (id, prefixScores, cb) ->
+    unless Object.keys(prefixScores).length > 0 then return cb(null)
+
     client.eval(
         STORE_PREFIX_SCRIPT,
         2,
@@ -85,7 +87,10 @@ storePrefixes = (id, prefixScores, cb) ->
         id,
         MAX_SET_SIZE,
         (err, minScores) ->
-            _.extend(MIN_SCORES, JSON.parse(minScores))
+            try
+                minScores = JSON.parse(minScores)
+                _.extend(MIN_SCORES, minScores)
+            catch e
 
             cb(null)
             fillQueue()
@@ -171,16 +176,16 @@ showStats = (i) ->
 
 
 
-QUEUE = async.queue(commitLine, 2)
+QUEUE = async.queue(commitLine, CONCURRENCY)
 fillQueue = () ->
-    stream.resume() if QUEUE.length() < 6
+    stream.resume() if QUEUE.length() < CONCURRENCY * 3
 
 readLines = (input, cb) ->
     id = 1
     buffer = ''
 
     input.on('data', (data) ->
-        if QUEUE.length() > 10
+        if QUEUE.length() > CONCURRENCY * 4
             #console.log("paused")
             stream.pause()
         buffer += data
