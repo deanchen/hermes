@@ -19,15 +19,11 @@ SCRIPT_HASH = ""
 STORE_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 
 args = process.argv.splice(2)
-path = args[0]
-###
-totalWorkers = args[1]
-workerIndex = args[2]
-###
-totalWorkers = 1
-workerIndex = 0
-MAX_SET_SIZE = args[1] # need to match redis config
-PORT = args[2] # need to match redis config
+path = args.unshift()
+totalWorkers = parseInt(args.unshift(), 10)
+workerIndex = parseInt(args.unshift(), 10)
+MAX_SET_SIZE = parseInt(args.unshift(), 10)
+PORT = parseInt(args.unshift(), 10)
 
 MIN_SCORES = {}
 problemLines = []
@@ -180,28 +176,36 @@ QUEUE = async.queue(commitLine, CONCURRENCY)
 fillQueue = () ->
     stream.resume() if QUEUE.length() < CONCURRENCY * 3
 
-readLines = (input, cb) ->
+readLines = (input) ->
     id = 1
     buffer = ''
 
     input.on('data', (data) ->
         if QUEUE.length() > CONCURRENCY * 4
-            #console.log("paused")
             stream.pause()
         buffer += data
         index = buffer.indexOf('\n')
         while (index > -1)
             line = buffer.substring(0, index)
             buffer = buffer.substring(index + 1)
-            QUEUE.push({line: line})
+            if ((id % totalworkers) is workersIndex) or totalWorkers is 1
+                QUEUE.push({line: line})
+                showStats(id) if id % 10000 is 0
             id++
-
-            showStats(id) if id % 10000 is 0
 
             index = buffer.indexOf('\n')
     )
     input.on('end', () ->
-        if buffer.length > 0 then cb(buffer, id++)
+        index = buffer.indexOf('\n')
+        while (index > -1)
+            line = buffer.substring(0, index)
+            buffer = buffer.substring(index + 1)
+            if ((id % totalworkers) is workersIndex) or totalWorkers is 1
+                QUEUE.push({line: line})
+                showStats(id) if id % 10000 is 0
+            id++
+
+            index = buffer.indexOf('\n')
     )
 
 
@@ -214,4 +218,4 @@ hashSet = (client, key, value, cb) ->
     client.hset(keyfields.key, keyfields.field, value, cb)
 
 
-readLines(stream, commitLine)
+readLines(stream)
