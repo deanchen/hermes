@@ -2,6 +2,7 @@ fs = require('fs')
 redis = require('redis')
 _ = require('underscore')
 async = require('async')
+exec = require('child_process').exec
 
 SCORING = {
     scale : 10
@@ -9,9 +10,9 @@ SCORING = {
     dupPrefixPenalty : 0.2
 }
 CONCURRENCY = 4
-COMMIT = true
 
-ESTIMATE_LINES = 20000000
+STREAM = null
+ESTIMATE_LINES = 0
 MIN_COMPLETE = 2
 MAX_COMPLETE = 30
 STOP_WORDS = fs.readFileSync('stop-words.txt', 'ascii').split('\n')
@@ -19,16 +20,17 @@ SCRIPT_HASH = ""
 STORE_PREFIX_SCRIPT = fs.readFileSync('insertPrefix.lua', 'ascii')
 
 args = process.argv.splice(2)
-path = args.unshift()
-totalWorkers = parseInt(args.unshift(), 10)
-workerIndex = parseInt(args.unshift(), 10)
-MAX_SET_SIZE = parseInt(args.unshift(), 10)
-PORT = parseInt(args.unshift(), 10)
+path = args.shift()
+totalWorkers = parseInt(args.shift(), 10)
+workerIndex = parseInt(args.shift(), 10)
+###
+totalWorkers = 1
+workerIndex = 0
+###
+MAX_SET_SIZE = parseInt(args.shift(), 10)
+PORT = parseInt(args.shift(), 10)
 
 MIN_SCORES = {}
-problemLines = []
-
-i = 0
 
 clients = []
 
@@ -48,19 +50,9 @@ client.send_command('script', ['load', STORE_PREFIX_SCRIPT, (err, res) ->
 )
 ###
 
-index = 1
 stats = {lines:0, words:0, prefixes:0}
 
 startTime = new Date()
-
-sent = 0
-completed = 0
-
-finished_processing = false
-stream = fs.createReadStream(path, {encoding:'ascii'})
-stream.on('end', () ->
-    clients.forEach((client) -> client.quit())
-)
 
 commitLine = (task, cb) ->
     line = task.line
@@ -75,7 +67,6 @@ commitLine = (task, cb) ->
 
 storePrefixes = (id, prefixScores, cb) ->
     unless Object.keys(prefixScores).length > 0 then return cb(null)
-
     client.eval(
         STORE_PREFIX_SCRIPT,
         2,
@@ -101,7 +92,6 @@ processTitle = (phrase) ->
         .split(' ')
         .filter((word)-> !~STOP_WORDS.indexOf(word))
         .map((word) ->
-            unless COMMIT then stats.words++
             if word.length > MAX_COMPLETE
                 upperlimit = MAX_COMPLETE - 1
             else
@@ -162,8 +152,6 @@ showStats = (i) ->
                 lines: i,
                 elapsed: stats["elapsed"],
                 memory: memHuman,
-                sent: sent,
-                completed: completed,
                 estimateMem: ((ESTIMATE_LINES/i) * memBytes)/1073741824
                 remainingTime: Math.round((ESTIMATE_LINES/i - 1) * stats["elapsed"])
             }
@@ -174,39 +162,35 @@ showStats = (i) ->
 
 QUEUE = async.queue(commitLine, CONCURRENCY)
 fillQueue = () ->
-    stream.resume() if QUEUE.length() < CONCURRENCY * 3
+    STREAM.resume() if QUEUE.length() < CONCURRENCY * 3
 
-readLines = (input) ->
-    id = 1
+COUNT = 1
+readLines = () ->
     buffer = ''
-
-    input.on('data', (data) ->
-        if QUEUE.length() > CONCURRENCY * 4
-            stream.pause()
-        buffer += data
-        index = buffer.indexOf('\n')
-        while (index > -1)
-            line = buffer.substring(0, index)
-            buffer = buffer.substring(index + 1)
-            if ((id % totalworkers) is workersIndex) or totalWorkers is 1
-                QUEUE.push({line: line})
-                showStats(id) if id % 10000 is 0
-            id++
-
-            index = buffer.indexOf('\n')
+    STREAM = fs.createReadStream(path, {encoding:'ascii'})
+        .on('data', (data) ->
+            if QUEUE.length() > CONCURRENCY * 4
+                STREAM.pause()
+            buffer += data
+            buffer = processBuffer(buffer)
+        )
+    STREAM.on('end', () ->
+        buffer = processBuffer(buffer)
     )
-    input.on('end', () ->
-        index = buffer.indexOf('\n')
-        while (index > -1)
-            line = buffer.substring(0, index)
-            buffer = buffer.substring(index + 1)
-            if ((id % totalworkers) is workersIndex) or totalWorkers is 1
-                QUEUE.push({line: line})
-                showStats(id) if id % 10000 is 0
-            id++
 
-            index = buffer.indexOf('\n')
-    )
+
+processBuffer = (buffer) ->
+    index = buffer.indexOf('\n')
+    while (index > -1)
+        line = buffer.substring(0, index)
+        buffer = buffer.substring(index + 1)
+        if ((COUNT % totalWorkers) is workerIndex) or totalWorkers is 1
+            QUEUE.push({line: line})
+            showStats(COUNT) if COUNT % 10000 is 0
+        COUNT++
+
+        index = buffer.indexOf('\n')
+    return buffer
 
 
 hashKeyFields = (key) ->
@@ -217,5 +201,7 @@ hashSet = (client, key, value, cb) ->
     keyfields = hashKeyFields(key)
     client.hset(keyfields.key, keyfields.field, value, cb)
 
-
-readLines(stream)
+exec('wc -l ' + path, (err, res) ->
+    ESTIMATE_LINES = res.split(' ')[0]
+    readLines()
+)
